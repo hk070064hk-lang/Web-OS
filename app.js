@@ -88,6 +88,56 @@
     }
   }
 
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function parseDirectUrl(raw) {
+    const s = (raw || '').trim();
+    if (!s || /\s/.test(s)) return null;
+
+    if (/^https?:\/\//i.test(s)) {
+      try {
+        const u = new URL(s);
+        if (u.protocol === 'http:' || u.protocol === 'https:') return u.toString();
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    // ドメイン形式（例: example.com, sub.domain.jp/path）のみURL扱い
+    if (/^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(\/.*)?$/.test(s)) {
+      try {
+        const u = new URL(`https://${s}`);
+        return u.toString();
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  function buildWorkerEndpoint(workerUrl, path) {
+    const base = String(workerUrl || '').trim().replace(/\/+$/, '');
+    if (!base) return null;
+    const normalizedBase = /^https?:\/\//i.test(base) ? base : `https://${base}`;
+    try {
+      const u = new URL(normalizedBase);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      u.pathname = `${u.pathname.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+      return u;
+    } catch {
+      return null;
+    }
+  }
+
   async function parseZipEntries(arrayBuffer) {
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
@@ -253,69 +303,95 @@
           return;
         }
 
-        const isUrl = /^https?:\/\//i.test(current) || (/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/.test(current) && !current.includes(' '));
-        if (isUrl) {
-          const targetUrl = /^https?:\/\//i.test(current) ? current : `https://${current}`;
-          tab.title = targetUrl.replace(/^https?:\/\//, '');
+        const directUrl = parseDirectUrl(current);
+        if (directUrl) {
+          tab.title = directUrl.replace(/^https?:\/\//, '');
           renderTabs();
 
           const cfg = Storage.getGlobal('oauth_cfg', {});
-          let iframeSrc = targetUrl;
+          let iframeSrc = directUrl;
+          const proxyEndpoint = tab.useProxy ? buildWorkerEndpoint(cfg.workerUrl, '/proxy') : null;
 
-          if (tab.useProxy && cfg.workerUrl) {
-            const pUrl = new URL(`${cfg.workerUrl.replace(/\/$/, '')}/proxy`);
-            pUrl.searchParams.set('url', targetUrl);
+          if (proxyEndpoint) {
+            proxyEndpoint.searchParams.set('url', directUrl);
             if (State.user?.token) {
-              pUrl.searchParams.set('token', State.user.token);
+              proxyEndpoint.searchParams.set('token', State.user.token);
             } else if (cfg.proxyPass) {
-              pUrl.searchParams.set('pass', cfg.proxyPass);
+              proxyEndpoint.searchParams.set('pass', cfg.proxyPass);
             }
-            iframeSrc = pUrl.toString();
+            iframeSrc = proxyEndpoint.toString();
           }
 
-          viewEl.innerHTML = `<iframe src="${iframeSrc}" style="width:100%;height:100%;border:none;background:#fff;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+          viewEl.innerHTML = `<iframe src="${escapeHtml(iframeSrc)}" style="width:100%;height:100%;border:none;background:#fff;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
           return;
         }
 
         tab.title = `検索: ${current}`;
         renderTabs();
-        viewEl.innerHTML = `<div style="padding:20px;color:#cbd5e1;">「${current}」を検索中...</div>`;
+        viewEl.innerHTML = `<div style="padding:20px;color:#cbd5e1;">「${escapeHtml(current)}」を検索中...</div>`;
 
         const cfg = Storage.getGlobal('oauth_cfg', {});
-        if (!cfg.workerUrl) {
-          viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">Worker URL が未設定です。URLの直接入力は開けます。</div>`;
+        const searchEndpoint = buildWorkerEndpoint(cfg.workerUrl, '/search');
+        if (!searchEndpoint) {
+          viewEl.innerHTML = `
+            <div style="padding:20px;">
+              <div style="padding:14px;border-radius:8px;background:rgba(255,255,255,0.06);">
+                <h4 style="margin-bottom:6px;">Worker URL が未設定または不正です</h4>
+                <p style="font-size:0.82rem;color:#94a3b8;">検索を行うには「設定」に正しい Cloudflare Worker URL（例: <code>https://xxx.workers.dev</code>）を設定してください。URLの直接入力はそのまま開けます。</p>
+              </div>
+            </div>
+          `;
           return;
         }
 
-        try {
-          const searchEndpoint = `${cfg.workerUrl.replace(/\/$/, '')}/search?q=${encodeURIComponent(current)}`;
-          const res = await fetch(searchEndpoint);
-          const data = await res.json();
-          const results = data?.results || [];
+        searchEndpoint.searchParams.set('q', current);
 
+        try {
+          const res = await fetch(searchEndpoint.toString());
+          const rawText = await res.text();
+          let data;
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            throw new Error(`Worker応答がJSONではありません (HTTP ${res.status}): ${rawText.slice(0, 120)}`);
+          }
+
+          if (!res.ok) {
+            throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+          }
+
+          const results = Array.isArray(data?.results) ? data.results : [];
           if (!results.length) {
-            viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">検索結果が見つかりませんでした。</div>`;
+            viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">「${escapeHtml(current)}」の検索結果が見つかりませんでした。</div>`;
             return;
           }
 
           viewEl.innerHTML = `
             <div style="padding:14px;display:flex;flex-direction:column;gap:10px;">
-              ${results.map(item => `
-                <div style="padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.06);">
-                  <div style="font-size:0.7rem;color:#94a3b8;">[${item.source || 'Web'}] ${item.url}</div>
-                  <h4 style="margin:3px 0;font-size:0.92rem;">${item.title}</h4>
-                  <p style="font-size:0.8rem;color:#cbd5e1;margin-bottom:8px;">${item.snippet || ''}</p>
-                  <button type="button" class="btn btn-small" data-open-url="${item.url}">ブラウザで開く</button>
-                </div>
-              `).join('')}
+              ${results.map(item => {
+                const safeUrl = parseDirectUrl(item.url) || '#';
+                return `
+                  <div style="padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.06);">
+                    <div style="font-size:0.7rem;color:#94a3b8;">[${escapeHtml(item.source || 'Web')}] ${escapeHtml(safeUrl)}</div>
+                    <h4 style="margin:3px 0;font-size:0.92rem;">${escapeHtml(item.title || '(無題)')}</h4>
+                    <p style="font-size:0.8rem;color:#cbd5e1;margin-bottom:8px;">${escapeHtml(item.snippet || '')}</p>
+                    <button type="button" class="btn btn-small" data-open-url="${escapeHtml(safeUrl)}">ブラウザで開く</button>
+                  </div>
+                `;
+              }).join('')}
             </div>
           `;
 
           viewEl.querySelectorAll('[data-open-url]').forEach(btn => {
-            btn.onclick = () => navigate(btn.dataset.openUrl);
+            btn.onclick = () => {
+              if (btn.dataset.openUrl !== '#') navigate(btn.dataset.openUrl);
+            };
           });
         } catch (err) {
-          viewEl.innerHTML = `<div style="padding:20px;color:#f87171;">検索エラー: ${err.message}</div>`;
+          const msg = err?.name === 'TypeError' && /pattern|regex/i.test(err.message)
+            ? `${err.message}（入力文字列またはWorker側のURL/正規表現パターンを確認してください）`
+            : err.message;
+          viewEl.innerHTML = `<div style="padding:20px;color:#f87171;">検索エラー: ${escapeHtml(msg)}</div>`;
         }
       };
 
@@ -392,10 +468,10 @@
         listEl.innerHTML = currentList.map(pkg => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.06);">
             <div>
-              <strong>${pkg.title}</strong>
-              <div style="font-size:0.74rem;color:#94a3b8;">${pkg.fileName} / エントリ数: ${pkg.entryCount}</div>
+              <strong>${escapeHtml(pkg.title)}</strong>
+              <div style="font-size:0.74rem;color:#94a3b8;">${escapeHtml(pkg.fileName)} / エントリ数: ${pkg.entryCount}</div>
             </div>
-            <button type="button" class="btn btn-small" data-launch-apk="${pkg.id}">起動</button>
+            <button type="button" class="btn btn-small" data-launch-apk="${escapeHtml(pkg.id)}">起動</button>
           </div>
         `).join('');
 
@@ -416,9 +492,9 @@
             AppRenderers[customAppId] = (body) => {
               body.innerHTML = `
                 <div style="padding:14px;font-size:0.84rem;line-height:1.6;">
-                  <h3 style="margin-bottom:6px;">${target.title}</h3>
-                  <p style="color:#94a3b8;margin-bottom:10px;">元ファイル: ${target.fileName}</p>
-                  <pre style="background:rgba(0,0,0,0.45);padding:10px;border-radius:8px;max-height:220px;overflow:auto;font-size:0.75rem;">${(target.entries || []).join('\n')}</pre>
+                  <h3 style="margin-bottom:6px;">${escapeHtml(target.title)}</h3>
+                  <p style="color:#94a3b8;margin-bottom:10px;">元ファイル: ${escapeHtml(target.fileName)}</p>
+                  <pre style="background:rgba(0,0,0,0.45);padding:10px;border-radius:8px;max-height:220px;overflow:auto;font-size:0.75rem;">${escapeHtml((target.entries || []).join('\n'))}</pre>
                 </div>
               `;
             };
@@ -476,7 +552,7 @@
             <button type="button" class="btn btn-small" id="g-add">追加して起動</button>
           </div>
           <div id="g-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-          <iframe id="g-frame" src="${initialGames[0]?.url || 'about:blank'}" style="flex:1;width:100%;border:none;border-radius:8px;background:#090d16;" sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms"></iframe>
+          <iframe id="g-frame" src="${escapeHtml(initialGames[0]?.url || 'about:blank')}" style="flex:1;width:100%;border:none;border-radius:8px;background:#090d16;" sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms"></iframe>
         </div>
       `;
 
@@ -489,7 +565,7 @@
       const renderList = () => {
         const games = Storage.getUserData('web_games', initialGames);
         listEl.innerHTML = games.map((g, i) => `
-          <button type="button" class="btn btn-small" data-g-idx="${i}">${g.name}</button>
+          <button type="button" class="btn btn-small" data-g-idx="${i}">${escapeHtml(g.name)}</button>
         `).join('');
 
         listEl.querySelectorAll('[data-g-idx]').forEach(btn => {
@@ -501,16 +577,15 @@
       };
 
       addBtn.onclick = () => {
-        const rawUrl = urlInput.value.trim();
-        if (!rawUrl) return;
-        const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
-        const name = nameInput.value.trim() || url.replace(/^https?:\/\//, '').slice(0, 20);
+        const validUrl = parseDirectUrl(urlInput.value);
+        if (!validUrl) return;
+        const name = nameInput.value.trim() || validUrl.replace(/^https?:\/\//, '').slice(0, 20);
         const games = Storage.getUserData('web_games', initialGames);
-        games.unshift({ name, url });
+        games.unshift({ name, url: validUrl });
         Storage.setUserData('web_games', games);
         nameInput.value = '';
         urlInput.value = '';
-        frameEl.src = url;
+        frameEl.src = validUrl;
         renderList();
       };
 
@@ -525,7 +600,7 @@
             <span style="font-size:0.8rem;color:#94a3b8;">自動保存メモ</span>
             <span id="note-status" style="font-size:0.75rem;color:#38bdf8;">保存済み</span>
           </div>
-          <textarea id="note-area" style="flex:1;width:100%;resize:none;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.35);color:#fff;font-size:0.88rem;line-height:1.5;">${savedText}</textarea>
+          <textarea id="note-area" style="flex:1;width:100%;resize:none;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.35);color:#fff;font-size:0.88rem;line-height:1.5;">${escapeHtml(savedText)}</textarea>
         </div>
       `;
       const area = container.querySelector('#note-area');
@@ -543,11 +618,11 @@
           <h3>システム・ネットワーク設定</h3>
           <label style="display:flex;flex-direction:column;gap:4px;">
             <span>Cloudflare Worker URL</span>
-            <input type="url" id="cfg-worker" value="${cfg.workerUrl || ''}" placeholder="https://....workers.dev" style="padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.35);color:#fff;">
+            <input type="url" id="cfg-worker" value="${escapeHtml(cfg.workerUrl || '')}" placeholder="https://....workers.dev" style="padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.35);color:#fff;">
           </label>
           <label style="display:flex;flex-direction:column;gap:4px;">
             <span>Proxy パスコード（任意）</span>
-            <input type="password" id="cfg-pass" value="${cfg.proxyPass || ''}" style="padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.35);color:#fff;">
+            <input type="password" id="cfg-pass" value="${escapeHtml(cfg.proxyPass || '')}" style="padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.35);color:#fff;">
           </label>
           <div>
             <button type="button" class="btn btn-small" id="cfg-save">設定を保存</button>
@@ -556,7 +631,11 @@
         </div>
       `;
       container.querySelector('#cfg-save').onclick = () => {
-        const nextCfg = { ...cfg, workerUrl: container.querySelector('#cfg-worker').value.trim(), proxyPass: container.querySelector('#cfg-pass').value };
+        const nextCfg = {
+          ...cfg,
+          workerUrl: container.querySelector('#cfg-worker').value.trim(),
+          proxyPass: container.querySelector('#cfg-pass').value
+        };
         Storage.setGlobal('oauth_cfg', nextCfg);
         updateProxyBadge();
         container.querySelector('#cfg-msg').textContent = '保存しました';
@@ -568,7 +647,7 @@
     const badge = document.getElementById('proxy-status-badge');
     if (!badge) return;
     const cfg = Storage.getGlobal('oauth_cfg', {});
-    badge.textContent = cfg.workerUrl ? 'Worker' : 'Local';
+    badge.textContent = buildWorkerEndpoint(cfg.workerUrl, '/proxy') ? 'Worker' : 'Local';
   }
 
   const WindowManager = {
@@ -601,7 +680,7 @@
 
       winEl.innerHTML = `
         <div class="win-header" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(30,41,59,0.95);cursor:move;user-select:none;">
-          <span style="font-size:0.86rem;font-weight:600;">${app.title}</span>
+          <span style="font-size:0.86rem;font-weight:600;">${escapeHtml(app.title)}</span>
           <div style="display:flex;gap:6px;">
             <button type="button" class="win-min" style="padding:2px 8px;border:none;border-radius:4px;background:rgba(255,255,255,0.12);color:#fff;cursor:pointer;">－</button>
             <button type="button" class="win-close" style="padding:2px 8px;border:none;border-radius:4px;background:#ef4444;color:#fff;cursor:pointer;">×</button>
@@ -693,7 +772,7 @@
           <div style="width:44px;height:44px;border-radius:10px;background:${app.color};display:flex;align-items:center;justify-content:center;">
             <i data-lucide="${app.icon}"></i>
           </div>
-          <span style="font-size:0.75rem;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,0.8);">${app.title}</span>
+          <span style="font-size:0.75rem;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,0.8);">${escapeHtml(app.title)}</span>
         `;
         item.onclick = () => WindowManager.open(app.id);
         grid.appendChild(item);
@@ -712,7 +791,7 @@
         btn.type = 'button';
         btn.className = 'start-app-item';
         btn.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:none;border-radius:6px;background:transparent;color:#fff;cursor:pointer;text-align:left;font-size:0.85rem;';
-        btn.innerHTML = `<i data-lucide="${app.icon}"></i><span>${app.title}</span>`;
+        btn.innerHTML = `<i data-lucide="${app.icon}"></i><span>${escapeHtml(app.title)}</span>`;
         btn.onclick = () => {
           setStartMenuOpen(false);
           WindowManager.open(app.id);

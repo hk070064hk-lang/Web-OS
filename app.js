@@ -1,9 +1,10 @@
 /**
- * WebOS Core — Pure Vanilla JS Desktop Environment
- * Chromebook / GitHub Pages / Cloudflare Workers Ready
+ * WebOS Core — Mobile & Desktop Ready Pure Vanilla JS Desktop Environment
  */
 (() => {
   'use strict';
+
+  const isMobile = () => window.innerWidth <= 768;
 
   /* =========================================================
    * 1. 定数・プリセット定義
@@ -16,14 +17,6 @@
   ];
 
   const APPS = {
-    notes: {
-      id: 'notes',
-      title: 'メモ帳',
-      icon: 'file-text',
-      color: 'linear-gradient(135deg, #f59e0b, #d97706)',
-      width: 560,
-      height: 400
-    },
     browser: {
       id: 'browser',
       title: 'Webブラウザ',
@@ -31,6 +24,14 @@
       color: 'linear-gradient(135deg, #38bdf8, #2563eb)',
       width: 780,
       height: 520
+    },
+    notes: {
+      id: 'notes',
+      title: 'メモ帳',
+      icon: 'file-text',
+      color: 'linear-gradient(135deg, #f59e0b, #d97706)',
+      width: 560,
+      height: 400
     },
     terminal: {
       id: 'terminal',
@@ -54,12 +55,12 @@
       icon: 'settings',
       color: 'linear-gradient(135deg, #64748b, #334155)',
       width: 520,
-      height: 450
+      height: 460
     }
   };
 
   /* =========================================================
-   * 2. ストレージ・永続化層（ユーザーごとの localStorage + IndexedDB）
+   * 2. ストレージ・永続化層
    * ========================================================= */
   const Storage = {
     getGlobal(key, fallback = null) {
@@ -89,13 +90,10 @@
       localStorage.setItem(this.userPrefix() + key, JSON.stringify(val));
       this.syncToIndexedDB(key, val);
     },
-    // 大容量データやバックアップ用の IndexedDB 同期
     openDB() {
       return new Promise((resolve, reject) => {
         const req = indexedDB.open('WebOS_DB', 1);
-        req.onupgradeneeded = () => {
-          req.result.createObjectStore('kv');
-        };
+        req.onupgradeneeded = () => req.result.createObjectStore('kv');
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
@@ -105,9 +103,7 @@
         const db = await this.openDB();
         const tx = db.transaction('kv', 'readwrite');
         tx.objectStore('kv').put(val, this.userPrefix() + key);
-      } catch {
-        // プライベートブラウジング等のフォールバック時は無視
-      }
+      } catch {}
     },
     exportAllUserData() {
       return {
@@ -130,22 +126,22 @@
    * 3. アプリケーション状態
    * ========================================================= */
   const State = {
-    user: null,       // { id, login, name, avatar_url, token }
-    windows: [],      // 起動中ウィンドウ配列
+    user: null,
+    windows: [],
     zCounter: 100,
     activeWinId: null
   };
 
   /* =========================================================
-   * 4. GitHub OAuth 認証フロー（PKCE + Cloudflare Worker対応）
+   * 4. GitHub OAuth 認証フロー
    * ========================================================= */
   const Auth = {
     async init() {
-      const cfg = Storage.getGlobal('oauth_cfg', { clientId: '', workerUrl: '' });
+      const cfg = Storage.getGlobal('oauth_cfg', { clientId: '', workerUrl: '', proxyPass: '' });
       document.getElementById('cfg-client-id').value = cfg.clientId || '';
       document.getElementById('cfg-worker-url').value = cfg.workerUrl || '';
+      document.getElementById('cfg-proxy-pass').value = cfg.proxyPass || '';
 
-      // OAuth コールバック（?code=...&state=...）の処理
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
       const state = params.get('state');
@@ -155,7 +151,6 @@
         return;
       }
 
-      // 既存セッション復元
       const savedSession = Storage.getGlobal('session', null);
       if (savedSession) {
         State.user = savedSession;
@@ -166,11 +161,10 @@
     async startGitHubLogin() {
       const cfg = Storage.getGlobal('oauth_cfg', {});
       if (!cfg.clientId || !cfg.workerUrl) {
-        alert('先に「GitHub OAuth 連携設定」を開いて Client ID と Worker URL を保存してください。\n（ローカルテストのみの場合は「ゲストとして続行」を押してください）');
+        alert('先に「GitHub OAuth ＆ プロキシ設定」を開いて Client ID と Worker URL を保存してください。');
         return;
       }
 
-      // PKCE (code_verifier & code_challenge) 生成
       const verifier = this.randomString(64);
       const challenge = await this.sha256Base64Url(verifier);
       const state = this.randomString(24);
@@ -193,12 +187,10 @@
     async handleOAuthCallback(code, state, cfg) {
       const savedState = sessionStorage.getItem('gh_oauth_state');
       const verifier = sessionStorage.getItem('gh_pkce_verifier');
-
-      // URLからパラメータを消去
       window.history.replaceState({}, document.title, window.location.pathname);
 
       if (!savedState || state !== savedState) {
-        alert('OAuth state検証エラーが発生しました。もう一度ログインしてください。');
+        alert('OAuth state検証エラーが発生しました。');
         return;
       }
 
@@ -214,11 +206,8 @@
           })
         });
         const data = await res.json();
-        if (!res.ok || !data.access_token) {
-          throw new Error(data.error || 'トークン取得失敗');
-        }
+        if (!res.ok || !data.access_token) throw new Error(data.error || 'トークン取得失敗');
 
-        // GitHub ユーザープロフィール取得
         const userRes = await fetch('https://api.github.com/user', {
           headers: {
             Authorization: `Bearer ${data.access_token}`,
@@ -269,47 +258,48 @@
     async sha256Base64Url(str) {
       const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
       return btoa(String.fromCharCode(...new Uint8Array(buf)))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
   };
 
   /* =========================================================
-   * 5. デスクトップ・アイコン配置・タスクバー・時計
+   * 5. デスクトップ・アイコン配置・タスクバー
    * ========================================================= */
   const Desktop = {
     boot() {
       document.getElementById('login-screen').classList.add('hidden');
       document.getElementById('desktop').classList.remove('hidden');
 
-      // プロフィール反映
       document.getElementById('user-avatar').src = State.user.avatar_url;
       document.getElementById('user-name').textContent = State.user.name;
       document.getElementById('user-handle').textContent = `@${State.user.login}`;
 
-      // プロキシステータス表示
-      const cfg = Storage.getGlobal('oauth_cfg', {});
-      const badge = document.getElementById('proxy-status-badge');
-      if (cfg.workerUrl) {
-        badge.textContent = 'Proxy Ready';
-        badge.classList.add('online');
-      }
-
+      this.updateProxyBadge();
       this.applyWallpaper();
       this.renderIcons();
       this.renderStartMenu();
       this.startClock();
       lucide.createIcons();
 
-      // 初回起動時はウェルカムメモを用意
       const notes = Storage.getUserData('notes', null);
       if (!notes) {
         Storage.setUserData('notes', [{
           id: Date.now(),
           title: 'WebOS へようこそ！',
-          content: '・デスクトップアイコンをダブルクリックで起動\n・右クリックでメニュー表示\n・ターミナルで "help" と入力するとコマンド一覧が見れます\n・ブラウザアプリはキーワード検索＆Workerプロキシに対応しています'
+          content: '・スマホはタップ、PCはダブルクリックでアプリ起動\n・ブラウザはキーワード検索（Wikipedia/DuckDuckGo）とプロキシに対応\n・設定アプリからCloudflare Worker URLとパスコードを登録できます'
         }]);
+      }
+    },
+
+    updateProxyBadge() {
+      const cfg = Storage.getGlobal('oauth_cfg', {});
+      const badge = document.getElementById('proxy-status-badge');
+      if (cfg.workerUrl) {
+        badge.textContent = 'Proxy Ready';
+        badge.classList.add('online');
+      } else {
+        badge.textContent = 'Local';
+        badge.classList.remove('online');
       }
     },
 
@@ -321,8 +311,15 @@
     getDefaultIconPositions() {
       const list = Object.values(APPS);
       const pos = {};
+      const cols = isMobile() ? 3 : 1;
       list.forEach((app, idx) => {
-        pos[app.id] = { x: 18, y: 18 + idx * 96 };
+        if (isMobile()) {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          pos[app.id] = { x: 16 + col * 96, y: 18 + row * 98 };
+        } else {
+          pos[app.id] = { x: 18, y: 18 + idx * 96 };
+        }
       });
       return pos;
     },
@@ -345,40 +342,51 @@
           <div class="icon-label">${app.title}</div>
         `;
 
-        // ダブルクリック（またはモバイルタップ）で起動
-        el.addEventListener('dblclick', () => WindowManager.open(app.id));
-        el.addEventListener('click', (e) => {
-          e.stopPropagation();
-          document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
-          el.classList.add('selected');
-        });
+        // Pointer Events で PCドラッグ と スマホタップ/ドラッグ を統合
+        let dragging = false, moved = false, startX, startY, origX, origY;
 
-        // アイコンのドラッグ移動と座標保存
-        let dragging = false, startX, startY, origX, origY;
-        el.addEventListener('mousedown', (e) => {
-          if (e.button !== 0) return;
+        el.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0 && e.pointerType === 'mouse') return;
           dragging = true;
+          moved = false;
           startX = e.clientX;
           startY = e.clientY;
           origX = p.x;
           origY = p.y;
+          el.setPointerCapture(e.pointerId);
         });
 
-        window.addEventListener('mousemove', (e) => {
+        el.addEventListener('pointermove', (e) => {
           if (!dragging) return;
-          p.x = Math.max(0, origX + (e.clientX - startX));
-          p.y = Math.max(0, origY + (e.clientY - startY));
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          if (Math.hypot(dx, dy) > 6) moved = true;
+          if (!moved) return;
+          p.x = Math.max(0, Math.min(window.innerWidth - 82, origX + dx));
+          p.y = Math.max(0, Math.min(window.innerHeight - 130, origY + dy));
           el.style.left = `${p.x}px`;
           el.style.top = `${p.y}px`;
         });
 
-        window.addEventListener('mouseup', () => {
+        el.addEventListener('pointerup', (e) => {
           if (!dragging) return;
           dragging = false;
-          positions[app.id] = { x: p.x, y: p.y };
-          Storage.setUserData('icons', positions);
+          el.releasePointerCapture(e.pointerId);
+          if (moved) {
+            positions[app.id] = { x: p.x, y: p.y };
+            Storage.setUserData('icons', positions);
+          } else {
+            // タッチ操作ならシングルタップで即起動、マウスなら選択状態に
+            if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+              WindowManager.open(app.id);
+            } else {
+              document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
+              el.classList.add('selected');
+            }
+          }
         });
 
+        el.addEventListener('dblclick', () => WindowManager.open(app.id));
         container.appendChild(el);
       });
       lucide.createIcons();
@@ -413,7 +421,7 @@
   };
 
   /* =========================================================
-   * 6. ウィンドウ管理システム（複数起動・ドラッグ・8方向リサイズ・z-index）
+   * 6. ウィンドウ管理システム（スマホ自動最大化・Pointer対応）
    * ========================================================= */
   const WindowManager = {
     open(appId, options = {}) {
@@ -421,18 +429,20 @@
       if (!app) return;
 
       const winId = `win_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const offset = (State.windows.length % 6) * 26;
+      const offset = (State.windows.length % 5) * 24;
+      const mobile = isMobile();
+
       const winObj = {
         id: winId,
         appId,
         title: options.title || app.title,
         icon: app.icon,
-        x: 90 + offset,
-        y: 45 + offset,
-        w: Math.min(app.width, window.innerWidth - 40),
-        h: Math.min(app.height, window.innerHeight - 90),
+        x: mobile ? 0 : 70 + offset,
+        y: mobile ? 0 : 35 + offset,
+        w: mobile ? window.innerWidth : Math.min(app.width, window.innerWidth - 30),
+        h: mobile ? window.innerHeight - 48 : Math.min(app.height, window.innerHeight - 80),
         minimized: false,
-        maximized: false
+        maximized: mobile
       };
 
       State.windows.push(winObj);
@@ -445,7 +455,7 @@
     createWindowElement(winObj, options) {
       const container = document.getElementById('window-container');
       const el = document.createElement('div');
-      el.className = 'os-window';
+      el.className = 'os-window' + (winObj.maximized ? ' maximized' : '');
       el.id = winObj.id;
       el.style.left = `${winObj.x}px`;
       el.style.top = `${winObj.y}px`;
@@ -475,25 +485,18 @@
         <div class="resizer se" data-dir="se"></div>
       `;
 
-      // クリックで最前面化
-      el.addEventListener('mousedown', () => this.focus(winObj.id));
+      el.addEventListener('pointerdown', () => this.focus(winObj.id));
 
-      // コントロールボタン
       el.querySelector('.win-btn.min').onclick = (e) => { e.stopPropagation(); this.minimize(winObj.id); };
       el.querySelector('.win-btn.max').onclick = (e) => { e.stopPropagation(); this.toggleMaximize(winObj.id); };
       el.querySelector('.win-btn.close').onclick = (e) => { e.stopPropagation(); this.close(winObj.id); };
 
-      // タイトルバーダブルクリックで最大化切替
       const titlebar = el.querySelector('.win-titlebar');
       titlebar.addEventListener('dblclick', () => this.toggleMaximize(winObj.id));
 
-      // タイトルバードラッグ移動
       this.bindDrag(el, titlebar, winObj);
-
-      // 8方向リサイズ
       this.bindResize(el, winObj);
 
-      // アプリ本体レンダリング
       const body = el.querySelector('.win-body');
       AppRenderers[winObj.appId](body, winObj, options);
 
@@ -503,40 +506,46 @@
 
     bindDrag(el, handle, winObj) {
       let dragging = false, sx, sy, ox, oy;
-      handle.addEventListener('mousedown', (e) => {
+      handle.addEventListener('pointerdown', (e) => {
         if (e.target.closest('.win-btn') || winObj.maximized) return;
         dragging = true;
         sx = e.clientX;
         sy = e.clientY;
         ox = winObj.x;
         oy = winObj.y;
+        handle.setPointerCapture(e.pointerId);
       });
-      window.addEventListener('mousemove', (e) => {
+      handle.addEventListener('pointermove', (e) => {
         if (!dragging) return;
         winObj.x = ox + (e.clientX - sx);
         winObj.y = Math.max(0, oy + (e.clientY - sy));
         el.style.left = `${winObj.x}px`;
         el.style.top = `${winObj.y}px`;
       });
-      window.addEventListener('mouseup', () => { dragging = false; });
+      handle.addEventListener('pointerup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        handle.releasePointerCapture(e.pointerId);
+      });
     },
 
     bindResize(el, winObj) {
       el.querySelectorAll('.resizer').forEach(r => {
-        r.addEventListener('mousedown', (e) => {
+        r.addEventListener('pointerdown', (e) => {
           if (winObj.maximized) return;
           e.stopPropagation();
           const dir = r.dataset.dir;
           const sx = e.clientX, sy = e.clientY;
           const { x: ox, y: oy, w: ow, h: oh } = winObj;
+          r.setPointerCapture(e.pointerId);
 
           const onMove = (ev) => {
             const dx = ev.clientX - sx;
             const dy = ev.clientY - sy;
-            if (dir.includes('e')) winObj.w = Math.max(280, ow + dx);
+            if (dir.includes('e')) winObj.w = Math.max(260, ow + dx);
             if (dir.includes('s')) winObj.h = Math.max(200, oh + dy);
             if (dir.includes('w')) {
-              const nw = Math.max(280, ow - dx);
+              const nw = Math.max(260, ow - dx);
               winObj.x = ox + (ow - nw);
               winObj.w = nw;
             }
@@ -551,12 +560,13 @@
             el.style.height = `${winObj.h}px`;
           };
 
-          const onUp = () => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
+          const onUp = (ev) => {
+            r.releasePointerCapture(ev.pointerId);
+            r.removeEventListener('pointermove', onMove);
+            r.removeEventListener('pointerup', onUp);
           };
-          window.addEventListener('mousemove', onMove);
-          window.addEventListener('mouseup', onUp);
+          r.addEventListener('pointermove', onMove);
+          r.addEventListener('pointerup', onUp);
         });
       });
     },
@@ -623,7 +633,7 @@
   };
 
   /* =========================================================
-   * 7. 標準搭載アプリ実装（メモ帳 / 電卓 / ターミナル / 設定 / ブラウザ）
+   * 7. 標準搭載アプリ実装
    * ========================================================= */
   const AppRenderers = {
     /* ---------- メモ帳 ---------- */
@@ -647,7 +657,7 @@
           </div>
           <div class="notes-editor">
             <input type="text" class="note-title-input" id="n-title" placeholder="タイトル">
-            <textarea class="note-textarea" id="n-body" placeholder="ここにメモを入力（自動保存されます）..."></textarea>
+            <textarea class="note-textarea" id="n-body" placeholder="ここにメモを入力..."></textarea>
           </div>
         </div>
       `;
@@ -716,13 +726,7 @@
     /* ---------- 電卓 ---------- */
     calculator(container) {
       let expr = '0';
-      const buttons = [
-        'C', '(', ')', '/',
-        '7', '8', '9', '*',
-        '4', '5', '6', '-',
-        '1', '2', '3', '+',
-        '0', '.', '←', '='
-      ];
+      const buttons = ['C','(',')','/','7','8','9','*','4','5','6','-','1','2','3','+','0','.','←','='];
 
       container.innerHTML = `
         <div class="calc-app">
@@ -739,18 +743,14 @@
         btn.className = 'calc-btn' + (['/', '*', '-', '+', 'C', '←'].includes(b) ? ' op' : '') + (b === '=' ? ' eq' : '');
         btn.textContent = b;
         btn.onclick = () => {
-          if (b === 'C') {
-            expr = '0';
-          } else if (b === '←') {
-            expr = expr.length > 1 ? expr.slice(0, -1) : '0';
-          } else if (b === '=') {
+          if (b === 'C') expr = '0';
+          else if (b === '←') expr = expr.length > 1 ? expr.slice(0, -1) : '0';
+          else if (b === '=') {
             try {
               if (!/^[0-9+\-*/().\s]+$/.test(expr)) throw new Error();
               const res = Function(`"use strict"; return (${expr})`)();
               expr = String(Number.isFinite(res) ? +res.toFixed(10) : 'Error');
-            } catch {
-              expr = 'Error';
-            }
+            } catch { expr = 'Error'; }
           } else {
             expr = (expr === '0' || expr === 'Error') ? b : expr + b;
           }
@@ -764,10 +764,10 @@
     terminal(container) {
       container.innerHTML = `
         <div class="term-app">
-          <div class="term-output" id="t-out">WebOS Shell v1.0 — "help" でコマンド一覧を表示\n</div>
+          <div class="term-output" id="t-out">WebOS Shell v1.1 — "help" でコマンド一覧を表示\n</div>
           <div class="term-input-line">
             <span class="term-prompt">${State.user.login}@webos:~$</span>
-            <input type="text" class="term-input" id="t-in" autofocus autocomplete="off">
+            <input type="text" class="term-input" id="t-in" autocomplete="off">
           </div>
         </div>
       `;
@@ -786,7 +786,7 @@
         const [cmd, ...args] = raw.split(/\s+/);
         switch (cmd.toLowerCase()) {
           case 'help':
-            print('利用可能コマンド:\n  help              - このヘルプを表示\n  apps              - 起動可能なアプリ一覧\n  open <app>        - アプリ起動 (notes, browser, calculator, settings)\n  search <keyword>  - ブラウザを開いて検索\n  whoami            - ログインユーザー表示\n  date              - 現在時刻\n  clear             - 画面クリア');
+            print('コマンド:\n  help              - ヘルプ表示\n  apps              - アプリ一覧\n  open <app>        - アプリ起動 (notes, browser, calculator, settings)\n  search <keyword>  - ブラウザ検索\n  whoami            - ユーザー情報\n  clear             - 画面クリア');
             break;
           case 'apps':
             print('notes, browser, terminal, calculator, settings');
@@ -796,22 +796,17 @@
               WindowManager.open(args[0]);
               print(`Launching ${args[0]}...`);
             } else {
-              print(`Error: アプリ "${args[0] || ''}" が見つかりません`);
+              print(`Error: "${args[0] || ''}" が見つかりません`);
             }
             break;
           case 'search':
             if (args.length) {
               WindowManager.open('browser', { initialQuery: args.join(' ') });
-              print(`Searching "${args.join(' ')}" in Browser...`);
-            } else {
-              print('Usage: search <keyword>');
-            }
+              print(`Searching "${args.join(' ')}"...`);
+            } else print('Usage: search <keyword>');
             break;
           case 'whoami':
-            print(`${State.user.name} (@${State.user.login}) [ID: ${State.user.id}]`);
-            break;
-          case 'date':
-            print(new Date().toString());
+            print(`${State.user.name} (@${State.user.login})`);
             break;
           case 'clear':
             out.textContent = '';
@@ -825,7 +820,7 @@
     /* ---------- 設定 ---------- */
     settings(container) {
       const currentWp = Storage.getUserData('wallpaper', WALLPAPERS[0].css);
-      const oauthCfg = Storage.getGlobal('oauth_cfg', { clientId: '', workerUrl: '' });
+      const oauthCfg = Storage.getGlobal('oauth_cfg', { clientId: '', workerUrl: '', proxyPass: '' });
 
       container.innerHTML = `
         <div class="settings-app">
@@ -835,21 +830,22 @@
           </div>
 
           <div class="settings-section">
-            <h3>GitHub アカウント ＆ プロキシWorker設定</h3>
+            <h3>GitHub OAuth ＆ プロキシWorker設定</h3>
             <p>ログイン中: <strong>${State.user.name}</strong> (@${State.user.login})</p>
             <div class="settings-row">
-              <input type="text" class="settings-input" id="s-client-id" placeholder="GitHub Client ID" value="${oauthCfg.clientId || ''}">
-              <input type="url" class="settings-input" id="s-worker-url" placeholder="Cloudflare Worker URL" value="${oauthCfg.workerUrl || ''}">
-              <button class="btn btn-small" id="s-save-worker">保存</button>
+              <input type="text" class="settings-input" id="s-client-id" placeholder="GitHub Client ID (任意)" value="${oauthCfg.clientId || ''}">
+              <input type="url" class="settings-input" id="s-worker-url" placeholder="Cloudflare Worker URL (例: https://xxx.workers.dev)" value="${oauthCfg.workerUrl || ''}">
+              <input type="password" class="settings-input" id="s-proxy-pass" placeholder="プロキシ専用パスコード (ゲスト利用時)" value="${oauthCfg.proxyPass || ''}">
+              <button class="btn btn-small" id="s-save-worker">設定を保存</button>
             </div>
           </div>
 
           <div class="settings-section">
             <h3>データのバックアップ / 復元（JSON）</h3>
-            <div class="settings-row">
-              <button class="btn btn-small" id="s-export">JSONエクスポート</button>
+            <div class="settings-row" style="flex-direction:row;">
+              <button class="btn btn-small" id="s-export">エクスポート</button>
               <label class="btn btn-small" style="cursor:pointer;">
-                JSONインポート
+                インポート
                 <input type="file" id="s-import" accept=".json" class="hidden">
               </label>
             </div>
@@ -857,13 +853,11 @@
         </div>
       `;
 
-      // 壁紙スウォッチ
       const grid = container.querySelector('#s-wp-grid');
       WALLPAPERS.forEach(wp => {
         const sw = document.createElement('div');
         sw.className = 'wp-swatch' + (wp.css === currentWp ? ' active' : '');
         sw.style.background = wp.css;
-        sw.title = wp.name;
         sw.onclick = () => {
           Storage.setUserData('wallpaper', wp.css);
           Desktop.applyWallpaper();
@@ -873,23 +867,15 @@
         grid.appendChild(sw);
       });
 
-      // Worker URL 保存
       container.querySelector('#s-save-worker').onclick = () => {
         const clientId = container.querySelector('#s-client-id').value.trim();
         const workerUrl = container.querySelector('#s-worker-url').value.trim();
-        Storage.setGlobal('oauth_cfg', { clientId, workerUrl });
-        const badge = document.getElementById('proxy-status-badge');
-        if (workerUrl) {
-          badge.textContent = 'Proxy Ready';
-          badge.classList.add('online');
-        } else {
-          badge.textContent = 'Local';
-          badge.classList.remove('online');
-        }
+        const proxyPass = container.querySelector('#s-proxy-pass').value.trim();
+        Storage.setGlobal('oauth_cfg', { clientId, workerUrl, proxyPass });
+        Desktop.updateProxyBadge();
         alert('設定を保存しました。');
       };
 
-      // エクスポート
       container.querySelector('#s-export').onclick = () => {
         const blob = new Blob([JSON.stringify(Storage.exportAllUserData(), null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
@@ -898,7 +884,6 @@
         a.click();
       };
 
-      // インポート
       container.querySelector('#s-import').onchange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -917,7 +902,7 @@
       };
     },
 
-    /* ---------- 仮想Webブラウザ（タブ・Wikipedia検索・Cloudflare Workerプロキシ対応） ---------- */
+    /* ---------- 仮想Webブラウザ（JSONP検索＋Workerプロキシ対応） ---------- */
     browser(container, winObj, options = {}) {
       let tabs = [{
         id: 1,
@@ -936,10 +921,13 @@
             <button class="b-nav-btn" id="b-back" title="戻る"><i data-lucide="arrow-left"></i></button>
             <button class="b-nav-btn" id="b-fwd" title="進む"><i data-lucide="arrow-right"></i></button>
             <button class="b-nav-btn" id="b-reload" title="再読み込み"><i data-lucide="rotate-cw"></i></button>
-            <input type="text" class="b-url-input" id="b-url" placeholder="URL または 検索キーワードを入力して Enter...">
-            <label class="b-proxy-toggle" title="Cloudflare Worker経由でX-Frame-Optionsをバイパス">
+            <form class="b-url-form" id="b-form">
+              <input type="text" class="b-url-input" id="b-url" placeholder="URL または 検索ワード...">
+              <button type="submit" class="b-go-btn">移動</button>
+            </form>
+            <label class="b-proxy-toggle">
               <input type="checkbox" id="b-proxy-chk" checked>
-              <span>Proxy経由</span>
+              <span>Proxy</span>
             </label>
           </div>
           <div class="browser-viewport" id="b-view"></div>
@@ -947,11 +935,41 @@
       `;
 
       const tabsEl = container.querySelector('#b-tabs');
+      const formEl = container.querySelector('#b-form');
       const urlInput = container.querySelector('#b-url');
       const proxyChk = container.querySelector('#b-proxy-chk');
       const viewEl = container.querySelector('#b-view');
 
       const getActiveTab = () => tabs.find(t => t.id === activeTabId);
+
+      // JSONPヘルパー（file:// や厳格なCSP環境でもWikipedia検索を確実に通す）
+      const fetchJsonp = (url) => new Promise((resolve, reject) => {
+        const cbName = `webos_cb_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        const script = document.createElement('script');
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('検索タイムアウト'));
+        }, 8000);
+
+        const cleanup = () => {
+          clearTimeout(timer);
+          delete window[cbName];
+          script.remove();
+        };
+
+        window[cbName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script.onerror = () => {
+          cleanup();
+          reject(new Error('ネットワーク接続エラー'));
+        };
+
+        script.src = `${url}&callback=${cbName}`;
+        document.body.appendChild(script);
+      });
 
       const renderTabs = () => {
         tabsEl.innerHTML = '';
@@ -1007,20 +1025,19 @@
         urlInput.value = current === 'about:home' ? '' : current;
         proxyChk.checked = tab.useProxy;
 
-        // ホーム画面
         if (current === 'about:home') {
-          tab.title = 'スタートページ';
+          tab.title = 'ホーム';
           renderTabs();
           viewEl.innerHTML = `
-            <div class="search-results-page" style="text-align:center; padding-top:48px;">
+            <div class="search-results-page" style="text-align:center; padding-top:36px;">
               <h2 style="margin-bottom:8px;">WebOS Browser</h2>
-              <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:20px;">
-                URL（https://...）の直接表示、またはキーワード検索（Wikipedia API）に対応
+              <p style="color:#94a3b8; font-size:0.84rem; margin-bottom:18px;">
+                上のバーに検索ワード、またはURLを入力して「移動」を押してください
               </p>
               <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+                <button class="btn btn-small" data-quick="日本の鉄道">検索: 日本の鉄道</button>
+                <button class="btn btn-small" data-quick="JavaScript">検索: JavaScript</button>
                 <button class="btn btn-small" data-quick="https://example.com">Example.com</button>
-                <button class="btn btn-small" data-quick="https://ja.wikipedia.org">Wikipedia</button>
-                <button class="btn btn-small" data-quick="HTML5">検索: HTML5</button>
               </div>
             </div>
           `;
@@ -1040,12 +1057,13 @@
           const cfg = Storage.getGlobal('oauth_cfg', {});
           let iframeSrc = targetUrl;
 
-          // Workerプロキシ経由の場合、トークンまたはゲストパスコードを付与
           if (tab.useProxy && cfg.workerUrl) {
             const pUrl = new URL(`${cfg.workerUrl.replace(/\/$/, '')}/proxy`);
             pUrl.searchParams.set('url', targetUrl);
             if (State.user?.token) {
               pUrl.searchParams.set('token', State.user.token);
+            } else if (cfg.proxyPass) {
+              pUrl.searchParams.set('pass', cfg.proxyPass);
             }
             iframeSrc = pUrl.toString();
           }
@@ -1054,35 +1072,47 @@
           return;
         }
 
-        // キーワード検索（フロントエンド直接fetch可能なWikipedia OpenSearch / Query API）
+        // キーワード検索（JSONP方式でCORS完全回避）
         tab.title = `検索: ${current}`;
         renderTabs();
         viewEl.innerHTML = `<div class="search-results-page"><p>「${current}」を検索中...</p></div>`;
 
         try {
-          const apiUrl = `https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(current)}&format=json&origin=*`;
-          const res = await fetch(apiUrl);
-          const data = await res.json();
+          const wikiApi = `https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(current)}&format=json`;
+          const data = await fetchJsonp(wikiApi);
           const results = data?.query?.search || [];
 
-          if (!results.length) {
-            viewEl.innerHTML = `<div class="search-results-page"><p>一致する結果が見つかりませんでした。</p></div>`;
-            return;
-          }
+          const ddgUrl = `https://duckduckgo.com/?q=${encodeURIComponent(current)}`;
+          const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(current)}`;
 
-          const html = results.map(item => {
-            const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(item.title)}`;
-            return `
-              <div class="search-result-card">
-                <h4>${item.title}</h4>
-                <p>${item.snippet}...</p>
-                <div class="search-result-actions">
-                  <button class="btn btn-small" data-open-url="${pageUrl}">ブラウザ内で開く</button>
-                  <a class="btn btn-small" style="background:rgba(255,255,255,0.12);color:#fff;text-decoration:none;" href="${pageUrl}" target="_blank" rel="noopener">外部タブで開く</a>
-                </div>
+          let html = `
+            <div class="search-result-card" style="border-color:rgba(56,189,248,0.4);">
+              <h4>外部検索エンジンで開く: 「${current}」</h4>
+              <p>Wikipedia以外のWeb全体を検索したい場合はこちらから直接開けます。</p>
+              <div class="search-result-actions">
+                <a class="btn btn-small" style="text-decoration:none;" href="${ddgUrl}" target="_blank" rel="noopener">DuckDuckGoで検索</a>
+                <a class="btn btn-small" style="background:rgba(255,255,255,0.14);color:#fff;text-decoration:none;" href="${googleUrl}" target="_blank" rel="noopener">Googleで検索</a>
               </div>
-            `;
-          }).join('');
+            </div>
+          `;
+
+          if (results.length) {
+            html += results.map(item => {
+              const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(item.title)}`;
+              return `
+                <div class="search-result-card">
+                  <h4>${item.title}</h4>
+                  <p>${item.snippet}...</p>
+                  <div class="search-result-actions">
+                    <button class="btn btn-small" data-open-url="${pageUrl}">OSブラウザ内で開く</button>
+                    <a class="btn btn-small" style="background:rgba(255,255,255,0.12);color:#fff;text-decoration:none;" href="${pageUrl}" target="_blank" rel="noopener">別タブで開く</a>
+                  </div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            html += `<p style="color:#94a3b8;font-size:0.85rem;">Wikipedia内に一致する記事は見つかりませんでした。</p>`;
+          }
 
           viewEl.innerHTML = `<div class="search-results-page">${html}</div>`;
           viewEl.querySelectorAll('[data-open-url]').forEach(btn => {
@@ -1093,9 +1123,10 @@
         }
       };
 
-      // ナビゲーションイベント
-      urlInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') navigate(urlInput.value);
+      formEl.addEventListener('submit', (e) => {
+        e.preventDefault();
+        urlInput.blur();
+        navigate(urlInput.value);
       });
       proxyChk.addEventListener('change', () => {
         getActiveTab().useProxy = proxyChk.checked;
@@ -1103,17 +1134,11 @@
       });
       container.querySelector('#b-back').onclick = () => {
         const tab = getActiveTab();
-        if (tab.histIndex > 0) {
-          tab.histIndex -= 1;
-          renderViewport();
-        }
+        if (tab.histIndex > 0) { tab.histIndex -= 1; renderViewport(); }
       };
       container.querySelector('#b-fwd').onclick = () => {
         const tab = getActiveTab();
-        if (tab.histIndex < tab.history.length - 1) {
-          tab.histIndex += 1;
-          renderViewport();
-        }
+        if (tab.histIndex < tab.history.length - 1) { tab.histIndex += 1; renderViewport(); }
       };
       container.querySelector('#b-reload').onclick = () => renderViewport();
 
@@ -1124,7 +1149,7 @@
   };
 
   /* =========================================================
-   * 8. グローバルUIイベント（ログイン・スタートメニュー・右クリック）
+   * 8. グローバルUIイベント（右クリック ＆ スマホ長押しメニュー対応）
    * ========================================================= */
   function bindGlobalEvents() {
     document.getElementById('btn-github-login').onclick = () => Auth.startGitHubLogin();
@@ -1134,11 +1159,11 @@
     document.getElementById('btn-save-oauth-cfg').onclick = () => {
       const clientId = document.getElementById('cfg-client-id').value.trim();
       const workerUrl = document.getElementById('cfg-worker-url').value.trim();
-      Storage.setGlobal('oauth_cfg', { clientId, workerUrl });
-      alert('GitHub OAuth / Worker 設定を保存しました。');
+      const proxyPass = document.getElementById('cfg-proxy-pass').value.trim();
+      Storage.setGlobal('oauth_cfg', { clientId, workerUrl, proxyPass });
+      alert('設定を保存しました。');
     };
 
-    // スタートメニュー開閉
     const startMenu = document.getElementById('start-menu');
     document.getElementById('btn-start').onclick = (e) => {
       e.stopPropagation();
@@ -1151,15 +1176,29 @@
       startMenu.classList.add('hidden');
     };
 
-    // 右クリックメニュー
+    // 右クリック ＆ スマホ長押しメニュー
     const ctxMenu = document.getElementById('context-menu');
-    document.getElementById('desktop-icons').addEventListener('contextmenu', (e) => {
-      e.preventDefault();
+    const desktopIcons = document.getElementById('desktop-icons');
+
+    const openContextMenu = (x, y) => {
       startMenu.classList.add('hidden');
-      ctxMenu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
-      ctxMenu.style.top = `${Math.min(e.clientY, window.innerHeight - 230)}px`;
+      ctxMenu.style.left = `${Math.min(x, window.innerWidth - 205)}px`;
+      ctxMenu.style.top = `${Math.min(y, window.innerHeight - 250)}px`;
       ctxMenu.classList.remove('hidden');
+    };
+
+    desktopIcons.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY);
     });
+
+    let longPressTimer = null;
+    desktopIcons.addEventListener('pointerdown', (e) => {
+      if (e.target !== desktopIcons) return;
+      longPressTimer = setTimeout(() => openContextMenu(e.clientX, e.clientY), 550);
+    });
+    desktopIcons.addEventListener('pointerup', () => clearTimeout(longPressTimer));
+    desktopIcons.addEventListener('pointermove', () => clearTimeout(longPressTimer));
 
     ctxMenu.querySelectorAll('.ctx-item').forEach(item => {
       item.onclick = () => {
@@ -1183,14 +1222,16 @@
       };
     });
 
-    // デスクトップ空白クリックでメニュー類を閉じる
-    document.addEventListener('click', () => {
-      startMenu.classList.add('hidden');
-      ctxMenu.classList.add('hidden');
+    document.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('#start-menu') && !e.target.closest('#btn-start')) {
+        startMenu.classList.add('hidden');
+      }
+      if (!e.target.closest('#context-menu')) {
+        ctxMenu.classList.add('hidden');
+      }
     });
   }
 
-  // エントリーポイント
   window.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
     bindGlobalEvents();

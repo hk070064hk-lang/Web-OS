@@ -82,6 +82,12 @@
     }
   };
 
+  function refreshIcons() {
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      window.lucide.createIcons();
+    }
+  }
+
   async function parseZipEntries(arrayBuffer) {
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
@@ -119,12 +125,6 @@
     }
 
     return entries;
-  }
-
-  function refreshIcons() {
-    if (window.lucide && typeof window.lucide.createIcons === 'function') {
-      window.lucide.createIcons();
-    }
   }
 
   const AppRenderers = {
@@ -240,12 +240,9 @@
           viewEl.innerHTML = `
             <div style="text-align:center;padding:36px 16px;">
               <h2 style="margin-bottom:8px;">WebOS Browser</h2>
-              <p style="color:#94a3b8;font-size:0.84rem;margin-bottom:18px;">
-                検索ワードまたはURLを入力してください
-              </p>
+              <p style="color:#94a3b8;font-size:0.84rem;margin-bottom:18px;">検索ワードまたはURLを入力してください</p>
               <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
                 <button type="button" class="btn btn-small" data-quick="WebOS">検索: WebOS</button>
-                <button type="button" class="btn btn-small" data-quick="HTML CSS">検索: HTML CSS</button>
                 <button type="button" class="btn btn-small" data-quick="https://example.com">Example.com</button>
               </div>
             </div>
@@ -286,14 +283,7 @@
 
         const cfg = Storage.getGlobal('oauth_cfg', {});
         if (!cfg.workerUrl) {
-          viewEl.innerHTML = `
-            <div style="padding:20px;">
-              <div style="padding:14px;border-radius:8px;background:rgba(255,255,255,0.06);">
-                <h4 style="margin-bottom:6px;">Worker URL が未設定です</h4>
-                <p style="font-size:0.82rem;color:#94a3b8;">Web検索を利用するには「設定」から Cloudflare Worker URL を保存してください。URLの直接入力はそのまま開けます。</p>
-              </div>
-            </div>
-          `;
+          viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">Worker URL が未設定です。URLの直接入力は開けます。</div>`;
           return;
         }
 
@@ -304,7 +294,7 @@
           const results = data?.results || [];
 
           if (!results.length) {
-            viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">「${current}」の検索結果が見つかりませんでした。</div>`;
+            viewEl.innerHTML = `<div style="padding:20px;color:#94a3b8;">検索結果が見つかりませんでした。</div>`;
             return;
           }
 
@@ -315,10 +305,7 @@
                   <div style="font-size:0.7rem;color:#94a3b8;">[${item.source || 'Web'}] ${item.url}</div>
                   <h4 style="margin:3px 0;font-size:0.92rem;">${item.title}</h4>
                   <p style="font-size:0.8rem;color:#cbd5e1;margin-bottom:8px;">${item.snippet || ''}</p>
-                  <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-small" data-open-url="${item.url}">ブラウザで開く</button>
-                    <a class="btn btn-small" style="text-decoration:none;" href="${item.url}" target="_blank" rel="noopener">外部タブで開く</a>
-                  </div>
+                  <button type="button" class="btn btn-small" data-open-url="${item.url}">ブラウザで開く</button>
                 </div>
               `).join('')}
             </div>
@@ -550,7 +537,7 @@
     },
 
     settings(container) {
-      const cfg = Storage.getGlobal('oauth_cfg', { workerUrl: '', proxyPass: '' });
+      const cfg = Storage.getGlobal('oauth_cfg', { clientId: '', workerUrl: '', proxyPass: '' });
       container.innerHTML = `
         <div style="padding:14px;font-size:0.84rem;display:flex;flex-direction:column;gap:10px;">
           <h3>システム・ネットワーク設定</h3>
@@ -569,21 +556,27 @@
         </div>
       `;
       container.querySelector('#cfg-save').onclick = () => {
-        Storage.setGlobal('oauth_cfg', {
-          workerUrl: container.querySelector('#cfg-worker').value.trim(),
-          proxyPass: container.querySelector('#cfg-pass').value
-        });
+        const nextCfg = { ...cfg, workerUrl: container.querySelector('#cfg-worker').value.trim(), proxyPass: container.querySelector('#cfg-pass').value };
+        Storage.setGlobal('oauth_cfg', nextCfg);
+        updateProxyBadge();
         container.querySelector('#cfg-msg').textContent = '保存しました';
       };
     }
   };
 
+  function updateProxyBadge() {
+    const badge = document.getElementById('proxy-status-badge');
+    if (!badge) return;
+    const cfg = Storage.getGlobal('oauth_cfg', {});
+    badge.textContent = cfg.workerUrl ? 'Worker' : 'Local';
+  }
+
   const WindowManager = {
     open(appId) {
       const app = APPS[appId];
       const renderer = AppRenderers[appId];
-      const layer = document.getElementById('window-layer') || document.body;
-      if (!app || !renderer) return;
+      const layer = document.getElementById('window-container');
+      if (!app || !renderer || !layer) return;
 
       const winId = `win_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
       const winEl = document.createElement('div');
@@ -591,10 +584,10 @@
       winEl.id = winId;
       winEl.style.cssText = `
         position:fixed;
-        top:70px;
-        left:${Math.max(20, 80 + (State.windows.length % 6) * 24)}px;
+        top:64px;
+        left:${Math.max(16, 70 + (State.windows.length % 6) * 24)}px;
         width:${Math.min(app.width || 640, window.innerWidth - 24)}px;
-        height:${Math.min(app.height || 440, window.innerHeight - 90)}px;
+        height:${Math.min(app.height || 440, window.innerHeight - 96)}px;
         z-index:${++State.zIndexCounter};
         background:#0f172a;
         color:#f8fafc;
@@ -628,6 +621,7 @@
       winEl.querySelector('.win-close').onclick = () => {
         winEl.remove();
         State.windows = State.windows.filter(w => w.id !== winId);
+        renderTaskbarWindows();
       };
 
       winEl.querySelector('.win-min').onclick = () => {
@@ -658,29 +652,30 @@
       });
 
       layer.appendChild(winEl);
-      State.windows.push({ id: winId, appId, el: winEl });
+      State.windows.push({ id: winId, appId, title: app.title, el: winEl });
+      renderTaskbarWindows();
       refreshIcons();
     }
   };
 
-  function findStartButton() {
-    return (
-      document.getElementById('btn-start') ||
-      document.querySelector('.start-btn, [data-action="start"], [id*="start-btn"], [class*="start-btn"], [id*="start"], [class*="start"]') ||
-      Array.from(document.querySelectorAll('button, [role="button"], a, div')).find(el => {
-        const txt = (el.textContent || '').trim();
-        return (txt === 'スタート' || txt === 'Start') && el.offsetParent !== null;
-      }) ||
-      null
-    );
-  }
-
-  function findStartMenu() {
-    return (
-      document.getElementById('start-menu') ||
-      document.querySelector('.start-menu, [data-menu="start"], [id*="start-menu"], [class*="start-menu"]') ||
-      null
-    );
+  function renderTaskbarWindows() {
+    const bar = document.getElementById('taskbar-windows');
+    if (!bar) return;
+    bar.innerHTML = '';
+    State.windows.forEach(w => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'taskbar-win-btn';
+      btn.textContent = w.title;
+      btn.style.cssText = 'padding:4px 10px;border:none;border-radius:6px;background:rgba(255,255,255,0.12);color:#fff;font-size:0.76rem;cursor:pointer;';
+      btn.onclick = () => {
+        if (w.el.style.display === 'none') {
+          w.el.style.display = 'flex';
+        }
+        w.el.style.zIndex = ++State.zIndexCounter;
+      };
+      bar.appendChild(btn);
+    });
   }
 
   const Desktop = {
@@ -708,8 +703,7 @@
     },
 
     renderStartMenu() {
-      const startMenu = findStartMenu();
-      const list = document.getElementById('start-app-list') || (startMenu ? startMenu.querySelector('.start-app-list, ul, div') : null);
+      const list = document.getElementById('start-app-list');
       if (!list) return;
       list.innerHTML = '';
 
@@ -720,11 +714,7 @@
         btn.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:none;border-radius:6px;background:transparent;color:#fff;cursor:pointer;text-align:left;font-size:0.85rem;';
         btn.innerHTML = `<i data-lucide="${app.icon}"></i><span>${app.title}</span>`;
         btn.onclick = () => {
-          const menu = findStartMenu();
-          if (menu) {
-            menu.classList.add('hidden');
-            menu.style.display = 'none';
-          }
+          setStartMenuOpen(false);
           WindowManager.open(app.id);
         };
         list.appendChild(btn);
@@ -734,53 +724,133 @@
     },
 
     updateClock() {
-      const clockEl = document.getElementById('clock');
-      if (!clockEl) return;
       const now = new Date();
-      const hh = String(now.getHours()).padStart(2, '0');
-      const mm = String(now.getMinutes()).padStart(2, '0');
-      clockEl.textContent = `${hh}:${mm}`;
+      const timeEl = document.getElementById('clock-time');
+      const dateEl = document.getElementById('clock-date');
+      if (timeEl) {
+        timeEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      }
+      if (dateEl) {
+        dateEl.textContent = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+      }
     }
   };
 
+  function setStartMenuOpen(open) {
+    const startMenu = document.getElementById('start-menu');
+    if (!startMenu) return;
+    startMenu.classList.toggle('hidden', !open);
+    startMenu.style.display = open ? 'block' : 'none';
+    if (open) {
+      startMenu.style.zIndex = String(++State.zIndexCounter);
+    }
+  }
+
+  function showDesktop(user) {
+    State.user = user;
+    Storage.setGlobal('current_user', user);
+
+    const loginScreen = document.getElementById('login-screen');
+    const desktop = document.getElementById('desktop');
+
+    if (loginScreen) {
+      loginScreen.classList.add('hidden');
+      loginScreen.style.display = 'none';
+    }
+    if (desktop) {
+      desktop.classList.remove('hidden');
+      desktop.style.display = 'block';
+    }
+
+    const nameEl = document.getElementById('user-name');
+    const handleEl = document.getElementById('user-handle');
+    if (nameEl) nameEl.textContent = user?.name || 'Guest User';
+    if (handleEl) handleEl.textContent = user?.handle || '@local';
+
+    Desktop.renderIcons();
+    Desktop.renderStartMenu();
+    updateProxyBadge();
+    refreshIcons();
+  }
+
   function bindGlobalEvents() {
-    const btnStart = findStartButton();
-    const startMenu = findStartMenu();
+    const btnGuest = document.getElementById('btn-guest-login');
+    const btnGithub = document.getElementById('btn-github-login');
+    const btnSaveCfg = document.getElementById('btn-save-oauth-cfg');
+    const btnStart = document.getElementById('btn-start');
+    const startMenu = document.getElementById('start-menu');
     const ctxMenu = document.getElementById('context-menu');
+    const btnSettingsQuick = document.getElementById('btn-settings-quick');
+    const btnLogout = document.getElementById('btn-logout');
 
-    const isMenuOpen = () => {
-      if (!startMenu) return false;
-      return !startMenu.classList.contains('hidden') && getComputedStyle(startMenu).display !== 'none';
-    };
+    if (btnGuest) {
+      btnGuest.addEventListener('click', () => {
+        showDesktop({ id: 'guest', name: 'Guest User', handle: '@local' });
+      });
+    }
 
-    const setMenuOpen = (open) => {
-      if (!startMenu) return;
-      startMenu.classList.toggle('hidden', !open);
-      startMenu.style.display = open ? 'block' : 'none';
-      if (open && getComputedStyle(startMenu).position === 'static') {
-        startMenu.style.position = 'fixed';
-        startMenu.style.bottom = '52px';
-        startMenu.style.left = '12px';
-        startMenu.style.zIndex = String(++State.zIndexCounter);
-      }
-      if (ctxMenu && open) {
-        ctxMenu.classList.add('hidden');
-        ctxMenu.style.display = 'none';
-      }
-    };
+    if (btnGithub) {
+      btnGithub.addEventListener('click', () => {
+        const cfg = Storage.getGlobal('oauth_cfg', {});
+        if (!cfg.clientId) {
+          showDesktop({ id: 'guest', name: 'Guest User', handle: '@local' });
+          return;
+        }
+        const redirectUri = encodeURIComponent(window.location.href.split('?')[0]);
+        window.location.href = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(cfg.clientId)}&redirect_uri=${redirectUri}&scope=read:user`;
+      });
+    }
+
+    if (btnSaveCfg) {
+      btnSaveCfg.addEventListener('click', () => {
+        const cfg = {
+          clientId: (document.getElementById('cfg-client-id')?.value || '').trim(),
+          workerUrl: (document.getElementById('cfg-worker-url')?.value || '').trim(),
+          proxyPass: document.getElementById('cfg-proxy-pass')?.value || ''
+        };
+        Storage.setGlobal('oauth_cfg', cfg);
+        updateProxyBadge();
+      });
+    }
 
     if (btnStart) {
-      btnStart.style.pointerEvents = 'auto';
       btnStart.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        setMenuOpen(!isMenuOpen());
+        if (!startMenu) return;
+        const isOpen = !startMenu.classList.contains('hidden') && getComputedStyle(startMenu).display !== 'none';
+        setStartMenuOpen(!isOpen);
+      });
+    }
+
+    if (btnSettingsQuick) {
+      btnSettingsQuick.addEventListener('click', () => {
+        setStartMenuOpen(false);
+        WindowManager.open('settings');
+      });
+    }
+
+    if (btnLogout) {
+      btnLogout.addEventListener('click', () => {
+        setStartMenuOpen(false);
+        Storage.setGlobal('current_user', null);
+        State.user = null;
+        const loginScreen = document.getElementById('login-screen');
+        const desktop = document.getElementById('desktop');
+        if (desktop) {
+          desktop.classList.add('hidden');
+          desktop.style.display = 'none';
+        }
+        if (loginScreen) {
+          loginScreen.classList.remove('hidden');
+          loginScreen.style.display = 'flex';
+        }
       });
     }
 
     document.addEventListener('click', (e) => {
       if (startMenu && !startMenu.contains(e.target) && (!btnStart || !btnStart.contains(e.target))) {
-        setMenuOpen(false);
+        setStartMenuOpen(false);
       }
       if (ctxMenu && !ctxMenu.contains(e.target)) {
         ctxMenu.classList.add('hidden');
@@ -790,11 +860,15 @@
   }
 
   function init() {
-    Desktop.renderIcons();
-    Desktop.renderStartMenu();
     Desktop.updateClock();
     bindGlobalEvents();
     setInterval(() => Desktop.updateClock(), 15000);
+
+    if (State.user) {
+      showDesktop(State.user);
+    } else {
+      showDesktop({ id: 'guest', name: 'Guest User', handle: '@local' });
+    }
     refreshIcons();
   }
 

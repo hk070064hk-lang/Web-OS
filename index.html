@@ -2,14 +2,13 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>WebOS — Vanilla JS Desktop</title>
   <link rel="stylesheet" href="style.css">
-  <!-- Lucide Icons (CDN) -->
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
-  <!-- ログイン画面（ロック画面） -->
+  <!-- ログイン画面 -->
   <div id="login-screen" class="login-screen">
     <div class="login-card">
       <div class="login-logo">
@@ -30,14 +29,16 @@
       </div>
 
       <details class="oauth-setup">
-        <summary>GitHub OAuth 連携設定（初回のみ）</summary>
+        <summary>GitHub OAuth ＆ プロキシ設定（任意）</summary>
         <div class="oauth-form">
           <label>GitHub Client ID</label>
           <input type="text" id="cfg-client-id" placeholder="Ov23li...">
-          <label>Cloudflare Worker URL（OAuth ＆ プロキシ用）</label>
+          <label>Cloudflare Worker URL</label>
           <input type="url" id="cfg-worker-url" placeholder="https://webos-proxy.your-name.workers.dev">
+          <label>プロキシ専用パスコード（ゲスト利用時）</label>
+          <input type="password" id="cfg-proxy-pass" placeholder="worker.jsで設定したパスコード">
           <button id="btn-save-oauth-cfg" class="btn btn-small">設定を保存</button>
-          <p class="hint">※ 未設定でも「ゲストとして続行」で全機能が動作します。</p>
+          <p class="hint">※ 未設定でも「ゲストとして続行」ですぐ使えます。</p>
         </div>
       </details>
     </div>
@@ -45,13 +46,10 @@
 
   <!-- デスクトップ本体 -->
   <div id="desktop" class="desktop hidden">
-    <!-- アプリアイコン配置エリア -->
     <div id="desktop-icons" class="desktop-icons"></div>
-
-    <!-- ウィンドウ描画コンテナ -->
     <div id="window-container" class="window-container"></div>
 
-    <!-- デスクトップ右クリックメニュー -->
+    <!-- 右クリック / 長押しメニュー -->
     <div id="context-menu" class="context-menu hidden">
       <div class="ctx-item" data-action="new-note">
         <i data-lucide="file-plus"></i><span>新規メモを作成</span>

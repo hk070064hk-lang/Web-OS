@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebOS — Vanilla JS Desktop</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Lucide Icons (CDN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <!-- ログイン画面（ロック画面） -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <i data-lucide="cpu"></i>
+      </div>
+      <h1>WebOS</h1>
+      <p class="login-sub">Pure Vanilla JS Desktop Environment</p>
+
+      <div class="login-actions">
+        <button id="btn-github-login" class="btn btn-github">
+          <i data-lucide="github"></i>
+          <span>GitHubでログイン</span>
+        </button>
+        <button id="btn-guest-login" class="btn btn-guest">
+          <i data-lucide="user"></i>
+          <span>ゲストとして続行（ローカル保存）</span>
+        </button>
+      </div>
+
+      <details class="oauth-setup">
+        <summary>GitHub OAuth 連携設定（初回のみ）</summary>
+        <div class="oauth-form">
+          <label>GitHub Client ID</label>
+          <input type="text" id="cfg-client-id" placeholder="Ov23li...">
+          <label>Cloudflare Worker URL（OAuth ＆ プロキシ用）</label>
+          <input type="url" id="cfg-worker-url" placeholder="https://webos-proxy.your-name.workers.dev">
+          <button id="btn-save-oauth-cfg" class="btn btn-small">設定を保存</button>
+          <p class="hint">※ 未設定でも「ゲストとして続行」で全機能が動作します。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- デスクトップ本体 -->
+  <div id="desktop" class="desktop hidden">
+    <!-- アプリアイコン配置エリア -->
+    <div id="desktop-icons" class="desktop-icons"></div>
+
+    <!-- ウィンドウ描画コンテナ -->
+    <div id="window-container" class="window-container"></div>
+
+    <!-- デスクトップ右クリックメニュー -->
+    <div id="context-menu" class="context-menu hidden">
+      <div class="ctx-item" data-action="new-note">
+        <i data-lucide="file-plus"></i><span>新規メモを作成</span>
+      </div>
+      <div class="ctx-item" data-action="open-terminal">
+        <i data-lucide="terminal"></i><span>ターミナルを開く</span>
+      </div>
+      <div class="ctx-item" data-action="open-browser">
+        <i data-lucide="globe"></i><span>ブラウザを開く</span>
+      </div>
+      <div class="ctx-divider"></div>
+      <div class="ctx-item" data-action="change-wallpaper">
+        <i data-lucide="image"></i><span>壁紙を切り替え</span>
+      </div>
+      <div class="ctx-item" data-action="reset-icons">
+        <i data-lucide="layout-grid"></i><span>アイコン配置を整理</span>
+      </div>
+      <div class="ctx-item" data-action="open-settings">
+        <i data-lucide="settings"></i><span>システム設定</span>
+      </div>
+    </div>
+
+    <!-- スタートメニュー -->
+    <div id="start-menu" class="start-menu hidden">
+      <div class="start-header">
+        <img id="user-avatar" src="" alt="avatar" class="avatar">
+        <div class="user-meta">
+          <div id="user-name" class="user-name">Guest User</div>
+          <div id="user-handle" class="user-handle">@local</div>
+        </div>
+      </div>
+      <div class="start-apps-label">アプリケーション</div>
+      <div id="start-app-list" class="start-app-list"></div>
+      <div class="start-footer">
+        <button id="btn-settings-quick" class="btn-icon-text">
+          <i data-lucide="settings"></i><span>設定</span>
+        </button>
+        <button id="btn-logout" class="btn-icon-text danger">
+          <i data-lucide="log-out"></i><span>ログアウト</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- タスクバー -->
+    <div id="taskbar" class="taskbar">
+      <button id="btn-start" class="start-btn" title="スタートメニュー">
+        <i data-lucide="layout-grid"></i>
+        <span>Start</span>
+      </button>
+      <div id="taskbar-windows" class="taskbar-windows"></div>
+      <div class="taskbar-tray">
+        <span id="proxy-status-badge" class="tray-badge" title="プロキシ接続状態">Local</span>
+        <div id="clock" class="clock">
+          <div id="clock-time">00:00</div>
+          <div id="clock-date">2026/01/01</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

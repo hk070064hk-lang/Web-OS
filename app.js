@@ -342,7 +342,6 @@
           <div class="icon-label">${app.title}</div>
         `;
 
-        // Pointer Events で PCドラッグ と スマホタップ/ドラッグ を統合
         let dragging = false, moved = false, startX, startY, origX, origY;
 
         el.addEventListener('pointerdown', (e) => {
@@ -353,14 +352,13 @@
           startY = e.clientY;
           origX = p.x;
           origY = p.y;
-          el.setPointerCapture(e.pointerId);
         });
 
-        el.addEventListener('pointermove', (e) => {
+        window.addEventListener('pointermove', (e) => {
           if (!dragging) return;
           const dx = e.clientX - startX;
           const dy = e.clientY - startY;
-          if (Math.hypot(dx, dy) > 6) moved = true;
+          if (Math.hypot(dx, dy) > 8) moved = true;
           if (!moved) return;
           p.x = Math.max(0, Math.min(window.innerWidth - 82, origX + dx));
           p.y = Math.max(0, Math.min(window.innerHeight - 130, origY + dy));
@@ -368,22 +366,22 @@
           el.style.top = `${p.y}px`;
         });
 
-        el.addEventListener('pointerup', (e) => {
+        window.addEventListener('pointerup', (e) => {
           if (!dragging) return;
           dragging = false;
-          el.releasePointerCapture(e.pointerId);
           if (moved) {
             positions[app.id] = { x: p.x, y: p.y };
             Storage.setUserData('icons', positions);
-          } else {
-            // タッチ操作ならシングルタップで即起動、マウスなら選択状態に
-            if (e.pointerType === 'touch' || e.pointerType === 'pen') {
-              WindowManager.open(app.id);
-            } else {
-              document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
-              el.classList.add('selected');
-            }
+          } else if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+            WindowManager.open(app.id);
           }
+        });
+
+        el.addEventListener('click', (e) => {
+          if (moved) { moved = false; return; }
+          e.stopPropagation();
+          document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
+          el.classList.add('selected');
         });
 
         el.addEventListener('dblclick', () => WindowManager.open(app.id));
@@ -397,6 +395,7 @@
       list.innerHTML = '';
       Object.values(APPS).forEach(app => {
         const btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'start-app-btn';
         btn.innerHTML = `<i data-lucide="${app.icon}"></i><span>${app.title}</span>`;
         btn.onclick = () => {
@@ -421,7 +420,7 @@
   };
 
   /* =========================================================
-   * 6. ウィンドウ管理システム（スマホ自動最大化・Pointer対応）
+   * 6. ウィンドウ管理システム（スマホ自動最大化・ボタンクリック安定化）
    * ========================================================= */
   const WindowManager = {
     open(appId, options = {}) {
@@ -469,9 +468,9 @@
             <span class="win-title-text">${winObj.title}</span>
           </div>
           <div class="win-controls">
-            <button class="win-btn min" title="最小化"><i data-lucide="minus"></i></button>
-            <button class="win-btn max" title="最大化"><i data-lucide="square"></i></button>
-            <button class="win-btn close" title="閉じる"><i data-lucide="x"></i></button>
+            <button type="button" class="win-btn min" title="最小化"><i data-lucide="minus"></i></button>
+            <button type="button" class="win-btn max" title="最大化"><i data-lucide="square"></i></button>
+            <button type="button" class="win-btn close" title="閉じる"><i data-lucide="x"></i></button>
           </div>
         </div>
         <div class="win-body"></div>
@@ -485,11 +484,32 @@
         <div class="resizer se" data-dir="se"></div>
       `;
 
-      el.addEventListener('pointerdown', () => this.focus(winObj.id));
+      el.addEventListener('pointerdown', () => {
+        if (State.activeWinId !== winObj.id) {
+          this.focus(winObj.id, false);
+        }
+      });
 
-      el.querySelector('.win-btn.min').onclick = (e) => { e.stopPropagation(); this.minimize(winObj.id); };
-      el.querySelector('.win-btn.max').onclick = (e) => { e.stopPropagation(); this.toggleMaximize(winObj.id); };
-      el.querySelector('.win-btn.close').onclick = (e) => { e.stopPropagation(); this.close(winObj.id); };
+      const minBtn = el.querySelector('.win-btn.min');
+      const maxBtn = el.querySelector('.win-btn.max');
+      const closeBtn = el.querySelector('.win-btn.close');
+
+      [minBtn, maxBtn, closeBtn].forEach(btn => {
+        btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      });
+
+      minBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.minimize(winObj.id);
+      });
+      maxBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleMaximize(winObj.id);
+      });
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.close(winObj.id);
+      });
 
       const titlebar = el.querySelector('.win-titlebar');
       titlebar.addEventListener('dblclick', () => this.toggleMaximize(winObj.id));
@@ -513,19 +533,16 @@
         sy = e.clientY;
         ox = winObj.x;
         oy = winObj.y;
-        handle.setPointerCapture(e.pointerId);
       });
-      handle.addEventListener('pointermove', (e) => {
+      window.addEventListener('pointermove', (e) => {
         if (!dragging) return;
         winObj.x = ox + (e.clientX - sx);
         winObj.y = Math.max(0, oy + (e.clientY - sy));
         el.style.left = `${winObj.x}px`;
         el.style.top = `${winObj.y}px`;
       });
-      handle.addEventListener('pointerup', (e) => {
-        if (!dragging) return;
+      window.addEventListener('pointerup', () => {
         dragging = false;
-        handle.releasePointerCapture(e.pointerId);
       });
     },
 
@@ -537,7 +554,6 @@
           const dir = r.dataset.dir;
           const sx = e.clientX, sy = e.clientY;
           const { x: ox, y: oy, w: ow, h: oh } = winObj;
-          r.setPointerCapture(e.pointerId);
 
           const onMove = (ev) => {
             const dx = ev.clientX - sx;
@@ -560,18 +576,17 @@
             el.style.height = `${winObj.h}px`;
           };
 
-          const onUp = (ev) => {
-            r.releasePointerCapture(ev.pointerId);
-            r.removeEventListener('pointermove', onMove);
-            r.removeEventListener('pointerup', onUp);
+          const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
           };
-          r.addEventListener('pointermove', onMove);
-          r.addEventListener('pointerup', onUp);
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onUp);
         });
       });
     },
 
-    focus(winId) {
+    focus(winId, rebuildTaskbar = true) {
       State.activeWinId = winId;
       State.zCounter += 1;
       State.windows.forEach(w => {
@@ -586,7 +601,14 @@
           el.classList.remove('active');
         }
       });
-      this.renderTaskbar();
+
+      document.querySelectorAll('#taskbar-windows .task-item').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.winId === winId);
+      });
+
+      if (rebuildTaskbar) {
+        this.renderTaskbar();
+      }
     },
 
     minimize(winId) {
@@ -617,15 +639,17 @@
       bar.innerHTML = '';
       State.windows.forEach(w => {
         const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.dataset.winId = w.id;
         btn.className = 'task-item' + (w.id === State.activeWinId && !w.minimized ? ' active' : '');
         btn.innerHTML = `<i data-lucide="${w.icon}"></i><span>${w.title}</span>`;
-        btn.onclick = () => {
+        btn.addEventListener('click', () => {
           if (w.id === State.activeWinId && !w.minimized) {
             this.minimize(w.id);
           } else {
             this.focus(w.id);
           }
-        };
+        });
         bar.appendChild(btn);
       });
       lucide.createIcons();
@@ -650,8 +674,8 @@
         <div class="notes-app">
           <div class="notes-sidebar">
             <div class="notes-toolbar">
-              <button class="btn btn-small" id="n-add">+ 新規</button>
-              <button class="btn btn-small" id="n-del" style="background:#ef4444;color:#fff;">削除</button>
+              <button type="button" class="btn btn-small" id="n-add">+ 新規</button>
+              <button type="button" class="btn btn-small" id="n-del" style="background:#ef4444;color:#fff;">削除</button>
             </div>
             <div class="notes-list" id="n-list"></div>
           </div>
@@ -740,6 +764,7 @@
 
       buttons.forEach(b => {
         const btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'calc-btn' + (['/', '*', '-', '+', 'C', '←'].includes(b) ? ' op' : '') + (b === '=' ? ' eq' : '');
         btn.textContent = b;
         btn.onclick = () => {
@@ -764,7 +789,7 @@
     terminal(container) {
       container.innerHTML = `
         <div class="term-app">
-          <div class="term-output" id="t-out">WebOS Shell v1.1 — "help" でコマンド一覧を表示\n</div>
+          <div class="term-output" id="t-out">WebOS Shell v1.2 — "help" でコマンド一覧を表示\n</div>
           <div class="term-input-line">
             <span class="term-prompt">${State.user.login}@webos:~$</span>
             <input type="text" class="term-input" id="t-in" autocomplete="off">
@@ -836,14 +861,14 @@
               <input type="text" class="settings-input" id="s-client-id" placeholder="GitHub Client ID (任意)" value="${oauthCfg.clientId || ''}">
               <input type="url" class="settings-input" id="s-worker-url" placeholder="Cloudflare Worker URL (例: https://xxx.workers.dev)" value="${oauthCfg.workerUrl || ''}">
               <input type="password" class="settings-input" id="s-proxy-pass" placeholder="プロキシ専用パスコード (ゲスト利用時)" value="${oauthCfg.proxyPass || ''}">
-              <button class="btn btn-small" id="s-save-worker">設定を保存</button>
+              <button type="button" class="btn btn-small" id="s-save-worker">設定を保存</button>
             </div>
           </div>
 
           <div class="settings-section">
             <h3>データのバックアップ / 復元（JSON）</h3>
             <div class="settings-row" style="flex-direction:row;">
-              <button class="btn btn-small" id="s-export">エクスポート</button>
+              <button type="button" class="btn btn-small" id="s-export">エクスポート</button>
               <label class="btn btn-small" style="cursor:pointer;">
                 インポート
                 <input type="file" id="s-import" accept=".json" class="hidden">
@@ -918,9 +943,9 @@
         <div class="browser-app">
           <div class="browser-tabs" id="b-tabs"></div>
           <div class="browser-navbar">
-            <button class="b-nav-btn" id="b-back" title="戻る"><i data-lucide="arrow-left"></i></button>
-            <button class="b-nav-btn" id="b-fwd" title="進む"><i data-lucide="arrow-right"></i></button>
-            <button class="b-nav-btn" id="b-reload" title="再読み込み"><i data-lucide="rotate-cw"></i></button>
+            <button type="button" class="b-nav-btn" id="b-back" title="戻る"><i data-lucide="arrow-left"></i></button>
+            <button type="button" class="b-nav-btn" id="b-fwd" title="進む"><i data-lucide="arrow-right"></i></button>
+            <button type="button" class="b-nav-btn" id="b-reload" title="再読み込み"><i data-lucide="rotate-cw"></i></button>
             <form class="b-url-form" id="b-form">
               <input type="text" class="b-url-input" id="b-url" placeholder="URL または 検索ワード...">
               <button type="submit" class="b-go-btn">移動</button>
@@ -942,7 +967,6 @@
 
       const getActiveTab = () => tabs.find(t => t.id === activeTabId);
 
-      // JSONPヘルパー（file:// や厳格なCSP環境でもWikipedia検索を確実に通す）
       const fetchJsonp = (url) => new Promise((resolve, reject) => {
         const cbName = `webos_cb_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
         const script = document.createElement('script');
@@ -994,6 +1018,7 @@
         });
 
         const addBtn = document.createElement('button');
+        addBtn.type = 'button';
         addBtn.className = 'b-new-tab';
         addBtn.textContent = '+';
         addBtn.onclick = () => {
@@ -1035,9 +1060,9 @@
                 上のバーに検索ワード、またはURLを入力して「移動」を押してください
               </p>
               <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-                <button class="btn btn-small" data-quick="日本の鉄道">検索: 日本の鉄道</button>
-                <button class="btn btn-small" data-quick="JavaScript">検索: JavaScript</button>
-                <button class="btn btn-small" data-quick="https://example.com">Example.com</button>
+                <button type="button" class="btn btn-small" data-quick="日本の鉄道">検索: 日本の鉄道</button>
+                <button type="button" class="btn btn-small" data-quick="JavaScript">検索: JavaScript</button>
+                <button type="button" class="btn btn-small" data-quick="https://example.com">Example.com</button>
               </div>
             </div>
           `;
@@ -1047,7 +1072,6 @@
           return;
         }
 
-        // URL判定
         const isUrl = /^https?:\/\//i.test(current) || (/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/.test(current) && !current.includes(' '));
         if (isUrl) {
           const targetUrl = /^https?:\/\//i.test(current) ? current : `https://${current}`;
@@ -1072,7 +1096,6 @@
           return;
         }
 
-        // キーワード検索（JSONP方式でCORS完全回避）
         tab.title = `検索: ${current}`;
         renderTabs();
         viewEl.innerHTML = `<div class="search-results-page"><p>「${current}」を検索中...</p></div>`;
@@ -1104,7 +1127,7 @@
                   <h4>${item.title}</h4>
                   <p>${item.snippet}...</p>
                   <div class="search-result-actions">
-                    <button class="btn btn-small" data-open-url="${pageUrl}">OSブラウザ内で開く</button>
+                    <button type="button" class="btn btn-small" data-open-url="${pageUrl}">OSブラウザ内で開く</button>
                     <a class="btn btn-small" style="background:rgba(255,255,255,0.12);color:#fff;text-decoration:none;" href="${pageUrl}" target="_blank" rel="noopener">別タブで開く</a>
                   </div>
                 </div>
@@ -1176,7 +1199,6 @@
       startMenu.classList.add('hidden');
     };
 
-    // 右クリック ＆ スマホ長押しメニュー
     const ctxMenu = document.getElementById('context-menu');
     const desktopIcons = document.getElementById('desktop-icons');
 
@@ -1222,7 +1244,7 @@
       };
     });
 
-    document.addEventListener('pointerdown', (e) => {
+    document.addEventListener('click', (e) => {
       if (!e.target.closest('#start-menu') && !e.target.closest('#btn-start')) {
         startMenu.classList.add('hidden');
       }
